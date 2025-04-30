@@ -3,7 +3,11 @@ import argparse
 import os
 import re
 
-from model import GPT
+from model import GPT, PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX
+
+# =============================================================================
+# Inference Utilities
+# =============================================================================
 
 class LanguageModelInference:
     """
@@ -33,7 +37,7 @@ class LanguageModelInference:
             num_layers=hyperparams['num_layers'],
             dropout=hyperparams['dropout'],
             max_len=hyperparams['max_len'],
-            pad_idx=0  # Assuming PAD is at index 0
+            pad_idx=PAD_IDX  # Using imported PAD_IDX constant
         ).to(self.device)
         
         # Load model weights
@@ -44,8 +48,8 @@ class LanguageModelInference:
         self.vocab = self.checkpoint['vocab']
         self.word2idx = {word: idx for idx, word in enumerate(self.vocab)}
         
-        # Special token indices
-        self.PAD_IDX, self.UNK_IDX, self.BOS_IDX, self.EOS_IDX = 0, 1, 2, 3
+        # Special token indices are imported from model.py
+        self.PAD_IDX, self.UNK_IDX, self.BOS_IDX, self.EOS_IDX = PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX
     
     def generate_text(self, prompt="", max_len=50, temperature=0.7, top_k=40):
         """
@@ -141,6 +145,9 @@ class LanguageModelInference:
             
             return predictions
 
+# =============================================================================
+# Interactive Interface
+# =============================================================================
 
 def interactive_generation():
     """
@@ -243,6 +250,9 @@ def interactive_generation():
     
     print("\nThank you for using the Language Model Text Generator!")
 
+# =============================================================================
+# Main Entry Point
+# =============================================================================
 
 if __name__ == "__main__":
     interactive_generation() 

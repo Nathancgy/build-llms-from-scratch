@@ -30,6 +30,28 @@ The implementation is broken down into the following components:
 - `PositionalEncoding`: Adds positional information to inputs.
 - `GPT`: Main model that stacks multiple decoder layers for next token prediction.
 
+## Model Parameters
+
+All model parameters are organized in a dedicated section at the top of `model.py` for easy access and modification:
+
+```python
+# Default values for the GPT model
+DEFAULT_VOCAB_SIZE = 5000    # Vocabulary size
+DEFAULT_D_MODEL = 256        # Embedding dimension
+DEFAULT_NUM_HEADS = 4        # Number of attention heads
+DEFAULT_D_FF = 512           # Feed-forward network dimension
+DEFAULT_NUM_LAYERS = 4       # Number of transformer layers
+DEFAULT_DROPOUT = 0.1        # Dropout rate
+DEFAULT_MAX_LEN = 1024       # Maximum sequence length
+DEFAULT_PAD_IDX = 0          # Padding token index
+
+# Special tokens by default
+PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
+SPECIAL_TOKENS = ['<pad>', '<unk>', '<bos>', '<eos>']
+```
+
+These parameters are used consistently across all scripts in the project, allowing for easy centralized configuration of the model.
+
 ## Requirements
 
 ```
@@ -95,13 +117,13 @@ The inference script provides several commands:
 
 ## Model Customization
 
-You can adjust the model hyperparameters in `train_lm.py` to:
-- Change the vocabulary size
-- Modify the model architecture (layers, dimensions, etc.)
-- Adjust training parameters (batch size, learning rate, etc.)
-- Use your own text dataset for training
+You can customize the model by:
 
-To use your own dataset, place text files in the `data/` directory and modify the `text_files` variable in the `main()` function of `train_lm.py`.
+1. Modifying the parameters in the `# Model Configuration Parameters` section at the top of `model.py`
+2. Importing and overriding specific parameters in `train_lm.py` for training experiments
+3. Using your own text dataset by placing text files in the `data/` directory
+
+To use your own dataset, place text files in the `data/` directory and modify the appropriate section in the `main()` function of `train_lm.py`.
 
 ## Learning Resources
 

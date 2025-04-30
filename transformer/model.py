@@ -3,6 +3,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# =============================================================================
+# Model Configuration Parameters
+# =============================================================================
+
+# Default values for the GPT model
+DEFAULT_VOCAB_SIZE = 5000    # Vocabulary size
+DEFAULT_D_MODEL = 256        # Embedding dimension
+DEFAULT_NUM_HEADS = 4        # Number of attention heads
+DEFAULT_D_FF = 512           # Feed-forward network dimension
+DEFAULT_NUM_LAYERS = 4       # Number of transformer layers
+DEFAULT_DROPOUT = 0.1        # Dropout rate
+DEFAULT_MAX_LEN = 1024       # Maximum sequence length
+DEFAULT_PAD_IDX = 0          # Padding token index
+
+# Special tokens by default
+PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
+SPECIAL_TOKENS = ['<pad>', '<unk>', '<bos>', '<eos>']
+
+# =============================================================================
+# Model Components
+# =============================================================================
+
 class MultiHeadAttention(nn.Module):
     """
     Multi-head attention module that allows the model to jointly attend to information
@@ -152,13 +174,22 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, :x.size(1)].to(x.device)
         return self.dropout(x)
 
+# =============================================================================
+# Main GPT Model
+# =============================================================================
 
 class GPT(nn.Module):
     """
     A simplified GPT-style transformer for next token prediction.
     """
-    def __init__(self, vocab_size, d_model=256, num_heads=4, 
-                 d_ff=512, num_layers=4, dropout=0.1, max_len=1024, pad_idx=0):
+    def __init__(self, vocab_size=DEFAULT_VOCAB_SIZE, 
+                 d_model=DEFAULT_D_MODEL, 
+                 num_heads=DEFAULT_NUM_HEADS, 
+                 d_ff=DEFAULT_D_FF, 
+                 num_layers=DEFAULT_NUM_LAYERS, 
+                 dropout=DEFAULT_DROPOUT, 
+                 max_len=DEFAULT_MAX_LEN, 
+                 pad_idx=DEFAULT_PAD_IDX):
         super().__init__()
         self.d_model = d_model
         self.embedding = nn.Embedding(vocab_size, d_model)

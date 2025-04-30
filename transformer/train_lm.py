@@ -11,9 +11,15 @@ import numpy as np
 import re
 from tqdm import tqdm
 
-from model import GPT
+from model import GPT, PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX, SPECIAL_TOKENS
+from model import DEFAULT_VOCAB_SIZE, DEFAULT_D_MODEL, DEFAULT_NUM_HEADS
+from model import DEFAULT_D_FF, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_MAX_LEN
 
-# Set device
+# =============================================================================
+# Training Configuration
+# =============================================================================
+
+# Device setup
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
@@ -23,22 +29,27 @@ torch.manual_seed(SEED)
 torch.backends.cudnn.deterministic = True
 np.random.seed(SEED)
 
-# Model hyperparameters
-VOCAB_SIZE = 5000  # Smaller vocabulary for simple tasks
-D_MODEL = 256
-NUM_HEADS = 4
-NUM_LAYERS = 4
-D_FF = 512
-DROPOUT = 0.1
-MAX_LEN = 128
+# Training hyperparameters
 BATCH_SIZE = 32
 LEARNING_RATE = 0.0005
 NUM_EPOCHS = 15
 
-# Special tokens
-PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
-special_tokens = ['<pad>', '<unk>', '<bos>', '<eos>']
+# Use default model hyperparameters from model.py
+VOCAB_SIZE = DEFAULT_VOCAB_SIZE
+D_MODEL = DEFAULT_D_MODEL
+NUM_HEADS = DEFAULT_NUM_HEADS
+D_FF = DEFAULT_D_FF
+NUM_LAYERS = DEFAULT_NUM_LAYERS
+DROPOUT = DEFAULT_DROPOUT
+MAX_LEN = DEFAULT_MAX_LEN
 
+# Special tokens are imported from model.py
+# PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
+# special_tokens = ['<pad>', '<unk>', '<bos>', '<eos>']
+
+# =============================================================================
+# Dataset and Data Loading
+# =============================================================================
 
 class SimpleTextDataset(Dataset):
     """
@@ -72,8 +83,8 @@ class SimpleTextDataset(Dataset):
                 counter.update(example)
             
             # Create vocabulary with words above min frequency
-            self.vocab = special_tokens.copy()
-            self.vocab.extend([word for word, count in counter.most_common(VOCAB_SIZE - len(special_tokens)) 
+            self.vocab = SPECIAL_TOKENS.copy()
+            self.vocab.extend([word for word, count in counter.most_common(VOCAB_SIZE - len(SPECIAL_TOKENS)) 
                               if count >= min_freq])
             
             # Create word to index mapping
@@ -111,6 +122,9 @@ def collate_batch(batch):
     
     return src, tgt
 
+# =============================================================================
+# Model Training and Evaluation
+# =============================================================================
 
 def initialize_model():
     """
@@ -254,14 +268,15 @@ def generate_text(model, vocab, prompt="", max_len=50, temperature=1.0, top_k=No
     
     return " ".join(generated_text)
 
+# =============================================================================
+# Data Generation and Training Loop
+# =============================================================================
 
-def main():
+def create_sample_dataset():
     """
-    Main training loop.
+    Create a sample text dataset of common English phrases.
     """
-    print("Starting language model training...")
-    
-    # Set up data files (example with included sample text)
+    # Set up data files
     data_dir = "data"
     os.makedirs(data_dir, exist_ok=True)
     
@@ -350,9 +365,25 @@ def main():
         with open(valid_file, 'w', encoding='utf-8') as f:
             f.writelines(valid_lines)
     
+    return train_file, valid_file
+
+
+def main():
+    """
+    Main training loop.
+    """
+    print("Starting language model training...")
+    
+    # Create sample dataset and get file paths
+    train_file, valid_file = create_sample_dataset()
+    
     # Load dataset
     train_dataset = SimpleTextDataset([train_file], max_len=MAX_LEN)
     valid_dataset = SimpleTextDataset([valid_file], max_len=MAX_LEN, vocab=train_dataset.vocab)
+    
+    print(f"Vocabulary size: {len(train_dataset.vocab)}")
+    print(f"Training examples: {len(train_dataset)}")
+    print(f"Validation examples: {len(valid_dataset)}")
     
     # Create data loaders
     train_dataloader = DataLoader(
@@ -374,6 +405,12 @@ def main():
     
     # Create directory for saving models
     os.makedirs('models', exist_ok=True)
+    
+    # Print model information
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model initialized with {total_params:,} total parameters")
+    print(f"Trainable parameters: {trainable_params:,}")
     
     # Training loop
     best_valid_loss = float('inf')
