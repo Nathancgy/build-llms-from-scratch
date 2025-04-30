@@ -2,6 +2,7 @@ import torch
 import argparse
 import os
 import re
+from tqdm import tqdm
 
 from model import GPT, PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX
 
@@ -23,6 +24,7 @@ class LanguageModelInference:
         print(f"Using device: {self.device}")
         
         # Load saved model
+        print("Loading model...")
         self.checkpoint = torch.load(model_path, map_location=self.device)
         
         # Get model hyperparameters
@@ -50,8 +52,10 @@ class LanguageModelInference:
         
         # Special token indices are imported from model.py
         self.PAD_IDX, self.UNK_IDX, self.BOS_IDX, self.EOS_IDX = PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX
+        
+        print(f"Model loaded successfully with {sum(p.numel() for p in self.model.parameters()):,} parameters")
     
-    def generate_text(self, prompt="", max_len=50, temperature=0.7, top_k=40):
+    def generate_text(self, prompt="", max_len=50, temperature=0.7, top_k=40, show_progress=False):
         """
         Generate text given a prompt.
         
@@ -60,6 +64,7 @@ class LanguageModelInference:
             max_len (int): Maximum number of tokens to generate
             temperature (float): Temperature for sampling (higher = more random)
             top_k (int): If set, only sample from the top k most likely tokens
+            show_progress (bool): Whether to show a progress bar during generation
             
         Returns:
             str: The generated text
@@ -81,16 +86,46 @@ class LanguageModelInference:
         
         # Generate text
         with torch.no_grad():
-            generated = self.model.generate(
-                prompt=input_tensor,
-                max_new_tokens=max_len,
-                temperature=temperature,
-                top_k=top_k
-            )
+            # Start with the prompt
+            x = input_tensor.clone()
+            
+            # Create progress bar if requested
+            progress_iter = tqdm(range(max_len), desc="Generating") if show_progress else range(max_len)
+            
+            # Generate tokens one by one
+            for _ in progress_iter:
+                # Get predictions for the current sequence
+                logits, _ = self.model(x)
+                
+                # Get the next token predictions (last token in sequence)
+                next_token_logits = logits[:, -1, :] / temperature
+                
+                # Apply top-k sampling if specified
+                if top_k is not None:
+                    top_k = min(top_k, next_token_logits.size(-1))
+                    # Get the top-k values and indices
+                    values, indices = torch.topk(next_token_logits, top_k, dim=-1)
+                    # Create a mask of the top-k positions
+                    mask = torch.zeros_like(next_token_logits).scatter_(1, indices, 1.0)
+                    # Apply the mask (set non-top-k values to -inf)
+                    next_token_logits = torch.where(mask > 0, next_token_logits, torch.tensor(-float('inf')).to(next_token_logits.device))
+                
+                # Apply softmax to get probabilities
+                probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
+                
+                # Sample from the distribution
+                next_token = torch.multinomial(probs, num_samples=1)
+                
+                # Stop if EOS token is generated
+                if next_token.item() == self.EOS_IDX:
+                    break
+                
+                # Append the new token to the sequence
+                x = torch.cat([x, next_token], dim=1)
         
         # Convert indices back to words
         generated_text = []
-        for idx in generated[0]:
+        for idx in x[0]:
             if idx.item() == self.BOS_IDX:
                 continue
             if idx.item() == self.EOS_IDX:
@@ -175,17 +210,19 @@ def interactive_generation():
     
     print("\nWelcome to the Language Model Text Generator")
     print("Enter a prompt to generate text, or 'q' to quit")
-    print("You can also use the following commands:")
+    print("Commands:")
     print("  /temp X   - Set temperature to X (e.g., /temp 0.5)")
     print("  /topk X   - Set top-k to X (e.g., /topk 20)")
     print("  /len X    - Set max length to X (e.g., /len 100)")
     print("  /predict  - Show top 5 next token predictions")
+    print("  /verbose  - Toggle progress bar during generation")
     print("-" * 50)
     
     # Default settings
     temperature = args.temperature
     top_k = args.top_k
     max_len = args.max_len
+    show_progress = False
     
     while True:
         prompt = input("\nPrompt: ")
@@ -219,6 +256,11 @@ def interactive_generation():
                 print("Invalid length. Should be an integer.")
             continue
             
+        elif prompt.startswith('/verbose'):
+            show_progress = not show_progress
+            print(f"Progress bar {'enabled' if show_progress else 'disabled'}")
+            continue
+            
         elif prompt.startswith('/predict'):
             if len(prompt) > 8:  # If there's text after "/predict"
                 input_text = prompt[8:].strip()
@@ -241,10 +283,10 @@ def interactive_generation():
                 prompt=prompt,
                 max_len=max_len,
                 temperature=temperature,
-                top_k=top_k
+                top_k=top_k,
+                show_progress=show_progress
             )
-            print(f"\nGenerated text (temp={temperature}, top_k={top_k}):")
-            print(f"{generated_text}")
+            print(f"\nGenerated: {generated_text}")
         else:
             print("Please enter a prompt.")
     

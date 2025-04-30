@@ -43,10 +43,6 @@ NUM_LAYERS = DEFAULT_NUM_LAYERS
 DROPOUT = DEFAULT_DROPOUT
 MAX_LEN = DEFAULT_MAX_LEN
 
-# Special tokens are imported from model.py
-# PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
-# special_tokens = ['<pad>', '<unk>', '<bos>', '<eos>']
-
 # =============================================================================
 # Dataset and Data Loading
 # =============================================================================
@@ -154,7 +150,7 @@ def initialize_model():
     
     # Learning rate scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, factor=0.1, patience=2, verbose=True
+        optimizer, factor=0.1, patience=2, verbose=False
     )
     
     return model, criterion, optimizer, scheduler
@@ -166,8 +162,12 @@ def train_epoch(model, dataloader, criterion, optimizer):
     """
     model.train()
     epoch_loss = 0
+    total_batches = len(dataloader)
     
-    for i, (src, tgt) in enumerate(tqdm(dataloader, desc="Training")):
+    # Create progress bar
+    progress_bar = tqdm(total=total_batches, desc="Training")
+    
+    for i, (src, tgt) in enumerate(dataloader):
         src = src.to(device)
         tgt = tgt.to(device)
         
@@ -194,11 +194,12 @@ def train_epoch(model, dataloader, criterion, optimizer):
         
         epoch_loss += loss.item()
         
-        # Print progress every 50 batches
-        if (i + 1) % 50 == 0:
-            print(f"Batch {i+1}/{len(dataloader)}, Loss: {loss.item():.4f}")
+        # Update progress bar with current loss
+        progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
+        progress_bar.update(1)
     
-    return epoch_loss / len(dataloader)
+    progress_bar.close()
+    return epoch_loss / total_batches
 
 
 def evaluate(model, dataloader, criterion):
@@ -207,9 +208,13 @@ def evaluate(model, dataloader, criterion):
     """
     model.eval()
     epoch_loss = 0
+    total_batches = len(dataloader)
+    
+    # Create progress bar
+    progress_bar = tqdm(total=total_batches, desc="Evaluating")
     
     with torch.no_grad():
-        for src, tgt in tqdm(dataloader, desc="Evaluating"):
+        for src, tgt in dataloader:
             src = src.to(device)
             tgt = tgt.to(device)
             
@@ -224,8 +229,12 @@ def evaluate(model, dataloader, criterion):
             loss = criterion(logits, tgt)
             
             epoch_loss += loss.item()
+            
+            # Update progress bar
+            progress_bar.update(1)
     
-    return epoch_loss / len(dataloader)
+    progress_bar.close()
+    return epoch_loss / total_batches
 
 
 def generate_text(model, vocab, prompt="", max_len=50, temperature=1.0, top_k=None):
@@ -250,12 +259,13 @@ def generate_text(model, vocab, prompt="", max_len=50, temperature=1.0, top_k=No
     input_tensor = torch.LongTensor(input_ids).unsqueeze(0).to(device)
     
     # Generate text
-    generated = model.generate(
-        prompt=input_tensor,
-        max_new_tokens=max_len,
-        temperature=temperature,
-        top_k=top_k
-    )
+    with torch.no_grad():
+        generated = model.generate(
+            prompt=input_tensor,
+            max_new_tokens=max_len,
+            temperature=temperature,
+            top_k=top_k
+        )
     
     # Convert indices back to words
     generated_text = []
@@ -414,8 +424,12 @@ def main():
     
     # Training loop
     best_valid_loss = float('inf')
+    print("Starting training...")
     
-    for epoch in range(NUM_EPOCHS):
+    # Create a wrapper progress bar for the epochs
+    epoch_progress = tqdm(range(NUM_EPOCHS), desc="Epochs")
+    
+    for epoch in epoch_progress:
         start_time = time.time()
         
         # Train and evaluate
@@ -429,16 +443,13 @@ def main():
         end_time = time.time()
         epoch_mins, epoch_secs = divmod(end_time - start_time, 60)
         
-        # Print epoch results
-        print(f"Epoch: {epoch+1:02} | Time: {epoch_mins}m {epoch_secs}s")
-        print(f"Train Loss: {train_loss:.4f} | Train PPL: {math.exp(train_loss):.4f}")
-        print(f"Valid Loss: {valid_loss:.4f} | Valid PPL: {math.exp(valid_loss):.4f}")
-        
-        # Generate some sample text
-        print("\nSample generated text:")
-        print(generate_text(model, train_dataset.vocab, prompt="The quick", max_len=20, temperature=0.8, top_k=40))
-        print(generate_text(model, train_dataset.vocab, prompt="All that", max_len=20, temperature=0.8, top_k=40))
-        print("-" * 50)
+        # Update epoch progress bar description
+        epoch_progress.set_description(f"Epoch {epoch+1}/{NUM_EPOCHS}")
+        epoch_progress.set_postfix({
+            "Train Loss": f"{train_loss:.4f}", 
+            "Valid Loss": f"{valid_loss:.4f}",
+            "Time": f"{epoch_mins}m {epoch_secs:.0f}s"
+        })
         
         # Save model if validation loss improved
         if valid_loss < best_valid_loss:
@@ -459,6 +470,8 @@ def main():
                     'max_len': MAX_LEN
                 }
             }, 'models/gpt_best.pt')
+            # Update on best model save
+            tqdm.write(f"Epoch {epoch+1}: New best model saved (valid loss: {valid_loss:.4f})")
     
     # Save final model
     torch.save({
@@ -479,23 +492,8 @@ def main():
     }, 'models/gpt_final.pt')
     
     print("\nTraining completed!")
-    
-    # Generate some final text samples
-    print("\nFinal text generation examples:")
-    prompts = [
-        "The quick brown",
-        "To be or",
-        "Time flies",
-        "Knowledge is",
-        "All that",
-        "Where there's",
-    ]
-    
-    for prompt in prompts:
-        print(f"\nPrompt: '{prompt}'")
-        print("Generated:", generate_text(model, train_dataset.vocab, prompt=prompt, max_len=30, temperature=0.7, top_k=50))
-    
-    print("\nDone!")
+    print(f"Best validation loss: {best_valid_loss:.4f}")
+    print("Final model saved to models/gpt_final.pt")
 
 
 if __name__ == "__main__":
