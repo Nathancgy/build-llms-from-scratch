@@ -9,11 +9,10 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 import argparse
 from tqdm import tqdm
-from itertools import chain
 
-from model import GPT, GPTConfig
+from model_muon import MuonGPT, MuonGPTConfig
 from data import get_dataloaders
-from tauon import Tauon
+from muon import Muon
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -22,7 +21,6 @@ def get_args():
     parser.add_argument('--n_head', type=int, default=8, help='number of attention heads')
     parser.add_argument('--n_embd', type=int, default=384, help='embedding dimension')
     parser.add_argument('--dropout', type=float, default=0.1, help='dropout rate')
-    parser.add_argument('--rank', type=int, default=4, help='rank for low-rank matrix factorization')
     
     # Data parameters
     parser.add_argument('--dataset', type=str, default='tiny_shakespeare', choices=['tiny_shakespeare', 'wikitext'], 
@@ -33,9 +31,10 @@ def get_args():
     
     # Training parameters
     parser.add_argument('--max_epochs', type=int, default=15, help='total epochs to train for')
-    parser.add_argument('--lr_tauon', type=float, default=0.02, help='learning rate for Tauon')
-    parser.add_argument('--weight_decay_tauon', type=float, default=0.02, help='weight decay for Tauon')
-    parser.add_argument('--momentum_tauon', type=float, default=0.9, help='momentum for Tauon')
+    parser.add_argument('--lr_muon', type=float, default=0.02, help='learning rate for Muon')
+    parser.add_argument('--weight_decay_muon', type=float, default=0.01, help='weight decay for Muon')
+    parser.add_argument('--momentum_muon', type=float, default=0.95, help='momentum for Muon')
+    parser.add_argument('--ns_steps', type=int, default=5, help='number of Newton-Schulz steps for Muon')
     parser.add_argument('--lr_adamw', type=float, default=2e-4, help='learning rate for AdamW')
     parser.add_argument('--weight_decay_adamw', type=float, default=0.1, help='weight decay for AdamW')
     parser.add_argument('--grad_clip', type=float, default=1.0, help='gradient clipping')
@@ -47,7 +46,11 @@ def get_args():
     parser.add_argument('--log_interval', type=int, default=10, help='log interval')
     parser.add_argument('--eval_interval', type=int, default=200, help='evaluation interval')
     parser.add_argument('--save_interval', type=int, default=1000, help='model saving interval')
-    parser.add_argument('--output_dir', type=str, default='output', help='directory for outputs')
+    parser.add_argument('--output_dir', type=str, default='output_muon', help='directory for outputs')
+    
+    # Muon specific parameters
+    parser.add_argument('--world_size', type=int, default=1, help='world size for distributed training')
+    parser.add_argument('--rank', type=int, default=0, help='rank for distributed training')
     
     args = parser.parse_args()
     return args
@@ -75,7 +78,7 @@ class TrainLogger:
     def close(self):
         self.writer.close()
 
-def train(model, train_loader, val_loader, tauon_opt, adamw_opt, args, logger):
+def train(model, train_loader, val_loader, muon_opt, adamw_opt, args, logger):
     """Main training loop"""
     device = args.device
     model.to(device)
@@ -106,16 +109,17 @@ def train(model, train_loader, val_loader, tauon_opt, adamw_opt, args, logger):
             # Backward pass and optimization
             loss.backward()
             
-            # Gradient clipping - fixed to use model parameters instead of optimizer
+            # Gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             
             # Optimizer steps
-            tauon_opt.step()
+            muon_opt.step()
             adamw_opt.step()
             
             # Zero gradients
-            tauon_opt.zero_grad(set_to_none=True)
-            adamw_opt.zero_grad(set_to_none=True)
+            for param in model.parameters():
+                if param.grad is not None:
+                    param.grad = None
             
             # Track statistics
             train_losses.append(loss.item())
@@ -180,14 +184,14 @@ def train(model, train_loader, val_loader, tauon_opt, adamw_opt, args, logger):
                 # Save best model
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
-                    save_checkpoint(model, tauon_opt, adamw_opt, epoch, val_loss, os.path.join(args.output_dir, 'best_model.pt'))
+                    save_checkpoint(model, muon_opt, adamw_opt, epoch, val_loss, os.path.join(args.output_dir, 'best_model.pt'))
                 
                 # Switch back to training mode
                 model.train()
                 
             # Save checkpoint
             if step % args.save_interval == 0:
-                save_checkpoint(model, tauon_opt, adamw_opt, epoch, val_losses[-1] if val_losses else float('inf'), 
+                save_checkpoint(model, muon_opt, adamw_opt, epoch, val_losses[-1] if val_losses else float('inf'), 
                                 os.path.join(args.output_dir, f'checkpoint_{step}.pt'))
         
         # End of epoch
@@ -207,7 +211,7 @@ def train(model, train_loader, val_loader, tauon_opt, adamw_opt, args, logger):
         print(f"Epoch time: {epoch_time/60:.2f} minutes | Speed: {epoch_tokens_per_second:.2f} tokens/second")
                 
     # Save final model
-    save_checkpoint(model, tauon_opt, adamw_opt, args.max_epochs, val_losses[-1] if val_losses else float('inf'),
+    save_checkpoint(model, muon_opt, adamw_opt, args.max_epochs, val_losses[-1] if val_losses else float('inf'),
                     os.path.join(args.output_dir, 'final_model.pt'))
     
     # Log final training stats
@@ -244,12 +248,12 @@ def evaluate(model, val_loader, device):
     print(f"Validation loss: {val_loss:.4f} | Validation PPL: {val_ppl:.2f}")
     return val_loss, val_ppl
 
-def save_checkpoint(model, tauon_opt, adamw_opt, epoch, val_loss, filepath):
+def save_checkpoint(model, muon_opt, adamw_opt, epoch, val_loss, filepath):
     """Save model checkpoint"""
     torch.save({
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
-        'tauon_optimizer_state_dict': tauon_opt.state_dict(),
+        'muon_optimizer_state_dict': muon_opt.state_dict(),
         'adamw_optimizer_state_dict': adamw_opt.state_dict(),
         'val_loss': val_loss,
     }, filepath)
@@ -301,27 +305,29 @@ def main():
     )
     
     # Initialize model
-    config = GPTConfig(
+    config = MuonGPTConfig(
         vocab_size=vocab_size,
         block_size=args.block_size,
         n_layer=args.n_layer,
         n_head=args.n_head,
         n_embd=args.n_embd,
-        dropout=args.dropout,
-        rank=args.rank
+        dropout=args.dropout
     )
-    model = GPT(config)
+    model = MuonGPT(config)
     
     # Create optimizers
-    tauon_params = model.get_tauon_params()
+    muon_params = model.get_muon_params()
     adamw_params = model.get_adamw_params()
     
-    tauon_opt = Tauon(
-        tauon_params,
-        lr=args.lr_tauon, 
-        weight_decay=args.weight_decay_tauon,
-        momentum=args.momentum_tauon,
-        nesterov=True
+    muon_opt = Muon(
+        muon_params,
+        lr=args.lr_muon, 
+        weight_decay=args.weight_decay_muon,
+        momentum=args.momentum_muon,
+        nesterov=True,
+        ns_steps=args.ns_steps,
+        rank=args.rank,
+        world_size=args.world_size
     )
     
     adamw_opt = AdamW(
@@ -333,13 +339,13 @@ def main():
     
     # Print model and training info
     print(f"Model has {sum(p.numel() for p in model.parameters())/1e6:.2f}M parameters")
-    print(f"  Tauon parameters: {sum(p.numel() for p in tauon_params)/1e6:.2f}M")
+    print(f"  Muon parameters: {sum(p.numel() for p in muon_params)/1e6:.2f}M")
     print(f"  AdamW parameters: {sum(p.numel() for p in adamw_params)/1e6:.2f}M")
     print(f"Training on {args.device}")
     
     # Train the model
     start_time = time.time()
-    train(model, train_loader, val_loader, tauon_opt, adamw_opt, args, logger)
+    train(model, train_loader, val_loader, muon_opt, adamw_opt, args, logger)
     total_time = time.time() - start_time
     
     print(f"Training completed in {total_time/60:.2f} minutes")
