@@ -9,6 +9,7 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 import argparse
 from tqdm import tqdm
+import torch.distributed as dist
 
 # Import both model types
 from model import GPT, GPTConfig
@@ -308,6 +309,20 @@ def generate_sample(model, device, context=None, max_new_tokens=100, temperature
     else:
         return f"Generated output ids: {output[0].tolist()}"
 
+def initialize_distributed_for_muon():
+    """Initialize distributed process group for Muon"""
+    if not dist.is_available():
+        raise RuntimeError("Distributed package not available")
+    
+    # Initialize process group for a single process
+    dist.init_process_group(
+        backend='nccl',
+        init_method='tcp://127.0.0.1:29500',
+        world_size=1,
+        rank=0
+    )
+    print("Initialized distributed process group for Muon")
+
 def main():
     args = get_args()
     
@@ -361,6 +376,13 @@ def main():
         print(f"Tauon parameters: {sum(p.numel() for p in specialized_params)/1e6:.2f}M")
         
     else:  # muon
+        # Initialize distributed process group for Muon
+        try:
+            initialize_distributed_for_muon()
+        except Exception as e:
+            print(f"Failed to initialize distributed process group: {e}")
+            print("Trying to continue with existing process group...")
+        
         config = MuonGPTConfig(
             vocab_size=vocab_size,
             block_size=args.block_size,
@@ -408,6 +430,10 @@ def main():
     
     print(f"Training completed in {total_time/60:.2f} minutes")
     logger.close()
+    
+    # Clean up distributed resources if Muon was used
+    if args.model_type == 'muon' and dist.is_initialized():
+        dist.destroy_process_group()
 
 if __name__ == "__main__":
     main() 
