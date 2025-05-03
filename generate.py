@@ -2,7 +2,7 @@ import os
 import torch
 import argparse
 import tiktoken
-from model import GPT, GPTConfig
+from models.model_tauon import GPT, GPTConfig
 
 def get_args():
     parser = argparse.ArgumentParser(description='Generate text using a trained GPT model')

@@ -12,20 +12,18 @@ from tqdm import tqdm
 import torch.distributed as dist
 
 # Import all model types
-from model import GPT, GPTConfig
-from model_muon import MuonGPT, MuonGPTConfig
-from model_scale import ScaleGPT, ScaleGPTConfig
-from model_neutrino import NeutrinoGPT, NeutrinoGPTConfig
+from models.model_tauon import GPT, GPTConfig
+from models.model_muon import MuonGPT, MuonGPTConfig
+from models.model_scale import ScaleGPT, ScaleGPTConfig
 from data import get_dataloaders
-from tauon import Tauon
-from muon import Muon
-from neutrino import Neutrino
+from optimizers.tauon import Tauon
+from optimizers.muon import Muon
 
 def get_args():
     parser = argparse.ArgumentParser()
     # Model parameters
-    parser.add_argument('--model_type', type=str, default='tauon', choices=['tauon', 'muon', 'scale', 'neutrino'], 
-                        help='model type to use (tauon, muon, scale, or neutrino)')
+    parser.add_argument('--model_type', type=str, default='tauon', choices=['tauon', 'muon', 'scale'], 
+                        help='model type to use (tauon, muon, or scale)')
     parser.add_argument('--n_layer', type=int, default=6, help='number of layers')
     parser.add_argument('--n_head', type=int, default=8, help='number of attention heads')
     parser.add_argument('--n_embd', type=int, default=384, help='embedding dimension')
@@ -49,16 +47,8 @@ def get_args():
     parser.add_argument('--weight_decay_muon', type=float, default=0.01, help='weight decay for Muon')
     parser.add_argument('--momentum_muon', type=float, default=0.95, help='momentum for Muon')
     parser.add_argument('--ns_steps', type=int, default=5, help='number of Newton-Schulz steps for Muon')
-    parser.add_argument('--world_size', type=int, default=1, help='world size for distributed training (Muon/Neutrino)')
-    parser.add_argument('--rank_muon', type=int, default=0, help='rank for distributed training (Muon/Neutrino)')
-    
-    # Neutrino training parameters
-    parser.add_argument('--lr_neutrino', type=float, default=0.02, help='learning rate for Neutrino')
-    parser.add_argument('--weight_decay_neutrino', type=float, default=0.01, help='weight decay for Neutrino')
-    parser.add_argument('--momentum_neutrino', type=float, default=0.95, help='momentum for Neutrino')
-    parser.add_argument('--shrink', type=float, default=0.01, help='soft threshold for singular values in Neutrino')
-    parser.add_argument('--svd_rank', type=int, default=6, help='rank for randomized SVD in Neutrino')
-    parser.add_argument('--power_iter', type=int, default=2, help='power iterations for randomized SVD in Neutrino')
+    parser.add_argument('--world_size', type=int, default=1, help='world size for distributed training (Muon)')
+    parser.add_argument('--rank_muon', type=int, default=0, help='rank for distributed training (Muon)')
     
     # Common training parameters
     parser.add_argument('--max_epochs', type=int, default=15, help='total epochs to train for')
@@ -150,7 +140,7 @@ def train(model, train_loader, val_loader, specialized_opt, adamw_opt, args, log
                 if specialized_opt is not None:
                     specialized_opt.zero_grad(set_to_none=True)
                 adamw_opt.zero_grad(set_to_none=True)
-            elif args.model_type in ['muon', 'neutrino']:
+            elif args.model_type == 'muon':
                 for param in model.parameters():
                     if param.grad is not None:
                         param.grad = None
@@ -301,8 +291,6 @@ def save_checkpoint(model, specialized_opt, adamw_opt, epoch, val_loss, filepath
             checkpoint['tauon_optimizer_state_dict'] = specialized_opt.state_dict()
         elif model_type == 'muon':
             checkpoint['muon_optimizer_state_dict'] = specialized_opt.state_dict()
-        elif model_type == 'neutrino':
-            checkpoint['neutrino_optimizer_state_dict'] = specialized_opt.state_dict()
     
     torch.save(checkpoint, filepath)
     print(f"Checkpoint saved to {filepath}")
@@ -330,7 +318,7 @@ def generate_sample(model, device, context=None, max_new_tokens=100, temperature
         return f"Generated output ids: {output[0].tolist()}"
 
 def initialize_distributed():
-    """Initialize distributed process group for Muon/Neutrino"""
+    """Initialize distributed process group for Muon"""
     if not dist.is_available():
         raise RuntimeError("Distributed package not available")
     
@@ -432,44 +420,6 @@ def main():
         
         print(f"Muon parameters: {sum(p.numel() for p in specialized_params)/1e6:.2f}M")
     
-    elif args.model_type == 'neutrino':
-        # Initialize distributed process group for Neutrino
-        try:
-            initialize_distributed()
-        except Exception as e:
-            print(f"Failed to initialize distributed process group: {e}")
-            print("Trying to continue with existing process group...")
-        
-        config = NeutrinoGPTConfig(
-            vocab_size=vocab_size,
-            block_size=args.block_size,
-            n_layer=args.n_layer,
-            n_head=args.n_head,
-            n_embd=args.n_embd,
-            dropout=args.dropout,
-            svd_rank=args.svd_rank
-        )
-        model = NeutrinoGPT(config)
-        
-        # Create optimizers for Neutrino model
-        specialized_params = model.get_neutrino_params()
-        adamw_params = model.get_adamw_params()
-        
-        specialized_opt = Neutrino(
-            specialized_params,
-            lr=args.lr_neutrino, 
-            weight_decay=args.weight_decay_neutrino,
-            momentum=args.momentum_neutrino,
-            nesterov=True,
-            shrink=args.shrink,
-            svd_rank=args.svd_rank,
-            power_iter=args.power_iter,
-            rank=args.rank_muon,
-            world_size=args.world_size
-        )
-        
-        print(f"Neutrino parameters: {sum(p.numel() for p in specialized_params)/1e6:.2f}M")
-    
     else:  # scale (standard)
         config = ScaleGPTConfig(
             vocab_size=vocab_size,
@@ -510,7 +460,7 @@ def main():
     logger.close()
     
     # Clean up distributed resources if distributed optimizers were used
-    if args.model_type in ['muon', 'neutrino'] and dist.is_initialized():
+    if args.model_type == 'muon' and dist.is_initialized():
         dist.destroy_process_group()
 
 if __name__ == "__main__":
